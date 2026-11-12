@@ -104,3 +104,18 @@ npm run dev                          # http://localhost:5173/merchant_demo/home
 ## 7. Langkah berikut
 - Tambah halaman riwayat release + tombol rollback di admin (repo sudah menyediakan `releases`/`rollback`).
 - E2E (Playwright) untuk alur home → seat-selection → checkout.
+
+## Spec screens demo (branch `feat/spec-screens-demo`)
+Aplikasi ini memakai engine `@fajekrina/sdui` (paket lokal, branch `feat/builder-adopt-0.3`) — versi sdui 0.3.x
+ada di branch `sdui-0.3.x`.
+
+- `src/sdui/config.ts` — allow-list aplikasi: `ENDPOINTS` (`submitCheckout` → `POST /client/action/submit`),
+  `LINKS` (https), `ASSETS` (nama gambar → URL). Payload hanya menyebut nama.
+- `src/sdui/engine.ts` — `createSduiEngine`: screen + manifest dari universal-service, cache IndexedDB,
+  `PayloadSecurity.insecureDevelopment` (signing backend default mati; untuk produksi pakai `signed(...)` + `?signed=true`).
+- `ScreenPage` — `/:merchantId/:screenKey?param=…`; query = seed (`{{seatId}}`); manifest di-refresh tiap screen.
+- `AdminBuilderPage` — `<SduiBuilder>` (drag-drop, preview, editor aksi dari allow-list) → save/publish ke
+  `merchant/screens`; lock dijaga `screenService`.
+
+Jalankan: universal-service di 8080, lalu `npm run dev`. Tes: `npm test` (engine vs seed screens, alur builder).
+Setelah pindah dari `sdui-0.3.x`: `npm install` dari `C:\sdui` agar `@fajekrina/sdui` kembali ke paket lokal.

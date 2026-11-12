@@ -1,131 +1,91 @@
-import { useState, useEffect } from 'react'
-import { FajrinaBuilder } from '@fajekrina/sdui/builder/react'
-import { universalMerchantRepository } from '../repositories/universalRepository'
-import type { UniversalComponent } from '@fajekrina/sdui'
+/**
+ * AdminBuilderPage — the @fajekrina/sdui Studio on universal-service spec screens.
+ * Pick a screen (or start a new one), edit it, Save draft / Publish. The action editor
+ * offers this app's allow-lists (screen keys, request and link names) — names, never URLs.
+ */
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { EditorDocument, SduiBuilder } from '@fajekrina/sdui/builder/react'
+import { createScreenService, blankScreen, SCREEN_KEY } from '../services/screenService'
+import { DEFAULT_MERCHANT, DEFAULT_SCREEN, ENDPOINTS, LINKS, assetURL } from '../sdui/config'
+
+const REQUESTS = Object.keys(ENDPOINTS)
+const LINK_NAMES = Object.keys(LINKS)
 
 export default function AdminBuilderPage() {
-  const [merchantId, setMerchantId] = useState('merchant_demo')
-  const [pageKey, setPageKey] = useState('')
-  const [pages, setPages] = useState<string[]>([])
-  const [data, setData] = useState<unknown>(null)
-  const [status, setStatus] = useState('')
-  const [lockVersion, setLockVersion] = useState<number | undefined>(undefined)
-  const [registry, setRegistry] = useState<Record<string, {props?: Record<string, unknown>}>|undefined>(undefined)
+  const service = useMemo(() => createScreenService(), [])
+  const doc = useMemo(() => new EditorDocument(), [])
+  const [merchantId, setMerchantId] = useState(DEFAULT_MERCHANT)
+  const [screens, setScreens] = useState<string[]>([])
+  const [current, setCurrent] = useState('')
+  const [notice, setNotice] = useState('')
 
-  // palette = backend registry (sdui_component_type); without it the builder falls back to the core registry
+  const refresh = useCallback(async () => {
+    try { setScreens(await service.list(merchantId)) } catch (e) { setNotice(`Daftar screen gagal dimuat: ${(e as Error).message}`) }
+  }, [service, merchantId])
+  useEffect(() => { void refresh() }, [refresh])
+
+  const open = useCallback(async (key: string) => {
+    try {
+      doc.importJSON(await service.open(merchantId, key) as object)
+      setCurrent(key)
+      setNotice('')
+    } catch (e) { setNotice(`Gagal membuka ${key}: ${(e as Error).message}`) }
+  }, [doc, service, merchantId])
+  // open the default screen once the list arrives
   useEffect(() => {
-    universalMerchantRepository.componentTypes().then(j => setRegistry(j.components)).catch(() => setRegistry(undefined))
-  }, [])
+    if (!current && screens.length) void open(screens.includes(DEFAULT_SCREEN) ? DEFAULT_SCREEN : screens[0]!)
+  }, [screens, current, open])
 
-  // load page list, default to home
-  const loadPages = async (mid: string) => {
-    try {
-      const res = await universalMerchantRepository.listPages(mid)
-      const list = res.pages ?? []
-      setPages(list)
-      if (!list.includes(pageKey) && list.includes('home')) setPageKey('home')
-      else if (!list.includes(pageKey) && list.length) setPageKey(list[0])
-    } catch { setPages([]) }
-  }
-  useEffect(() => { loadPages(merchantId) }, [merchantId])
-
-  // load draft when pageKey selected
-  useEffect(() => {
-    if (!pageKey) return
-    // if pageKey is unsaved temp (not in pages), show empty draft locally — hilang saat refresh
-    if (pages.length && !pages.includes(pageKey)) {
-      setData({ layout: { components: [] } } as unknown)
-      return
-    }
-    universalMerchantRepository.getDraft(merchantId, pageKey).then(d => { setData(d); setLockVersion(d.lockVersion) }).catch(() => {})
-  }, [merchantId, pageKey, pages])
-
-  const handleNew = async () => {
-    const input = prompt('Nama page baru (huruf/angka/_/-):', 'my-page')
-    if (!input) return
-    const key = input.trim()
-    if (!key) { setStatus('PageKey wajib diisi'); setTimeout(()=>setStatus(''),3000); return }
-    if (!/^[a-z0-9_-]+$/i.test(key)) { setStatus('PageKey hanya huruf/angka/_/-'); setTimeout(()=>setStatus(''),3000); return }
-    // uniq check — harus belum ada di backend
-    try {
-      const { pages: list } = await universalMerchantRepository.listPages(merchantId)
-      if (list.includes(key)) { setStatus(`PageKey "${key}" sudah ada`); setTimeout(()=>setStatus(''),3000); return }
-    } catch {}
-    try {
-      const existing = await universalMerchantRepository.getDraft(merchantId, key).catch(()=>null)
-      if (existing && (existing as unknown as {layout?:unknown})?.layout) { setStatus(`PageKey "${key}" sudah ada`); setTimeout(()=>setStatus(''),3000); return }
-    } catch {}
-    // unsaved temp — hilang saat refresh jika belum save
-    setPageKey(key)
-    setData({ layout: { components: [] } } as unknown)
-    setStatus(`Draft baru "${key}" — belum tersimpan (hilang saat refresh)`)
-    setTimeout(()=>setStatus(''),3000)
+  const create = () => {
+    const key = prompt('Key screen baru (huruf/angka/_, diawali huruf):', 'promoBanner')?.trim()
+    if (!key) return
+    if (!SCREEN_KEY.test(key)) { setNotice('Key tidak valid: huruf/angka/_ dan diawali huruf'); return }
+    if (screens.includes(key)) { setNotice(`Screen "${key}" sudah ada`); return }
+    service.forget(key)
+    doc.importJSON(blankScreen(key))
+    setCurrent(key)
+    setNotice(`Screen baru "${key}" — belum tersimpan`)
   }
 
-  const onSave = async ({ components }: { components: UniversalComponent[] }) => {
-    let key = pageKey.trim()
-    if (!key) {
-      const input = prompt('pageKey baru:', 'my-page')
-      if (!input) { setStatus('Save gagal: pageKey wajib diisi'); setTimeout(()=>setStatus(''),3000); return }
-      key = input.trim()
-      if (!key) { setStatus('Save gagal: pageKey wajib diisi'); setTimeout(()=>setStatus(''),3000); return }
-    }
-    if (!/^[a-z0-9_-]+$/i.test(key)) { setStatus('Save gagal: pageKey hanya huruf/angka/_/-'); setTimeout(()=>setStatus(''),3000); return }
-    // uniq check hanya untuk new page (yang belum ada di list)
-    const isNew = !pages.includes(key)
-    if (isNew) {
-      try {
-        const { pages: list } = await universalMerchantRepository.listPages(merchantId)
-        if (list.includes(key)) { setStatus(`Save gagal: pageKey "${key}" sudah ada`); setTimeout(()=>setStatus(''),3000); return }
-      } catch {}
-    }
-    try {
-      const res = await universalMerchantRepository.save(merchantId, key, components, isNew ? undefined : lockVersion) as { tree?: string; unchanged?: string[]; page?: { lockVersion?: number } }
-      setPageKey(key)
-      setData({ layout: { components } } as unknown)
-      setLockVersion(res.page?.lockVersion)
-      setStatus(`Saved ✔ ${res.tree ?? key}${res.unchanged?.length === 2 ? ' (tidak ada perubahan)' : ''}`)
-      setTimeout(() => setStatus(''), 3000)
-      loadPages(merchantId)
-    } catch (e) {
-      const err = e as Error & { status?: number }
-      setStatus(err.status === 409 ? 'Save failed: draft diubah di tempat lain — pilih ulang page untuk memuat versi terbaru' : 'Save failed: ' + String(err.message))
-      setTimeout(()=>setStatus(''),5000)
-    }
+  // Studio shows "Saved ✔" / "Save failed: …"; an error thrown here is the failure message
+  const onSave = async (payload: unknown) => {
+    const result = await service.save(merchantId, payload)
+    setCurrent(result.key)
+    setNotice(result.unchanged ? 'Tidak ada perubahan' : '')
+    await refresh()
+  }
+  const onPublish = async (payload: unknown) => {
+    const result = await service.publish(merchantId, payload)
+    setCurrent(result.key)
+    setNotice(result.unchanged ? `Sudah terpublikasi (v${result.sequence})` : `Terpublikasi v${result.sequence} — buka /${merchantId}/${result.key}`)
+    await refresh()
   }
 
-  const onPublish = async ({ components }: { components: UniversalComponent[] }) => {
-    let key = pageKey.trim()
-    if (!key) { setStatus('Publish gagal: pageKey wajib diisi — Save dulu'); setTimeout(()=>setStatus(''),3000); return }
-    // publish harus sudah pernah save (uniq exists)
-    try {
-      const existing = await universalMerchantRepository.getDraft(merchantId, key).catch(()=>null)
-      if (!existing) { setStatus(`Publish gagal: pageKey "${key}" belum ada — Save dulu`); setTimeout(()=>setStatus(''),3000); return }
-    } catch {}
-    try {
-      const res = await universalMerchantRepository.publish(merchantId, key)
-      setStatus(`Published ✔ ${res.releaseId}`)
-      setTimeout(() => setStatus(''), 3000)
-    } catch (e) { setStatus('Publish failed: ' + String((e as Error).message)); setTimeout(()=>setStatus(''),3000) }
-    // sync data after publish
-    try { const d = await universalMerchantRepository.getDraft(merchantId, key); setData(d); setLockVersion(d.lockVersion) } catch {}
-  }
-
+  const field = 'h-8 rounded-md border border-slate-300 bg-white px-2 text-sm'
   return (
-    <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', gap: 8, padding: 8, background: '#1a1f35', alignItems: 'center', flexWrap:'wrap' }}>
-        <input value={merchantId} onChange={e => setMerchantId(e.target.value)} placeholder="merchantId" style={{ height: 28, borderRadius: 6, border: '1px solid #2c3354', background: '#0f1220', color: '#e6e9f5', padding: '0 8px', fontSize: 13 }} />
-        <select value={pageKey} onChange={e => setPageKey(e.target.value)} style={{ height: 28, borderRadius: 6, border: '1px solid #2c3354', background: '#0f1220', color: '#e6e9f5', padding: '0 8px', fontSize: 13, minWidth: 180 }}>
-          {pages.length ? pages.map(p=> <option key={p} value={p}>{p}</option>) : <option value="">(no pages)</option>}
-          {pageKey && !pages.includes(pageKey) ? <option value={pageKey}>{pageKey} (draft)</option> : null}
+    <div className="flex h-screen flex-col bg-slate-100">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-white px-3 py-2 text-sm">
+        <strong>Builder</strong>
+        <input className={field} value={merchantId} onChange={(e) => { setMerchantId(e.target.value.trim()); setCurrent('') }} aria-label="merchantId" />
+        <select className={`${field} min-w-44`} value={current} onChange={(e) => void open(e.target.value)} aria-label="Screen">
+          {screens.map((k) => <option key={k} value={k}>{k}</option>)}
+          {current && !screens.includes(current) ? <option value={current}>{current} (baru)</option> : null}
         </select>
-        <button onClick={handleNew} style={{ height: 28, padding:'0 12px', borderRadius:6, border:'1px solid #6c8cff', background:'#6c8cff', color:'#fff', cursor:'pointer', fontSize:13}}>New</button>
-        <span style={{ fontSize: 11, color: '#9aa3c7' }}>default home • draft hilang saat refresh jika belum save</span>
-        <span style={{ marginLeft: 'auto', fontSize: 12, color: (status.includes('failed') || status.includes('gagal')) ? '#ff6b6b' : '#3ad29f' }}>{status}</span>
-        <a href="/" style={{ fontSize: 12, color: '#6c8cff' }}>Home →</a>
+        <button className="h-8 rounded-md bg-indigo-600 px-3 text-white" onClick={create}>Screen baru</button>
+        <span className="text-slate-500">{notice}</span>
+        {current ? <a className="ml-auto text-indigo-600 hover:underline" href={`/${merchantId}/${current}`} target="_blank" rel="noreferrer">Lihat di klien →</a> : null}
       </div>
-      <div style={{ flex: 1, minHeight: 0 }}>
-        <FajrinaBuilder data={data as never} registry={registry} pages={pages} merchantId={merchantId} pageKey={pageKey} onSave={onSave} onPublish={onPublish} onChange={setData as never} />
+      <div className="min-h-0 flex-1 p-2">
+        <SduiBuilder
+          document={doc}
+          title={current ? `${merchantId} / ${current}` : merchantId}
+          screens={screens}
+          requests={REQUESTS}
+          links={LINK_NAMES}
+          assetURL={assetURL}
+          onSave={onSave}
+          onPublish={onPublish}
+        />
       </div>
     </div>
   )
