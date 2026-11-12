@@ -1,39 +1,34 @@
 /**
  * Service — Universal SDUI (business logic)
- * Wraps repository + maps UniversalPageConfigService.java handleAction → navigate target
+ * Page loading goes through the library loader (ETag revalidation + last-good cache +
+ * re-validation), with this app's repository plugged in as the NetworkPort.
  */
 import { universalRepository, type UniversalRepository, type ActionPayload } from '../repositories/universalRepository'
-import type { UniversalPageConfig } from '@fajekrina/sdui'
+import { loadPage, resolvePorts, toErrorPage as buildErrorPage, type LoadResult, type StoragePort, type UniversalPageConfig } from '@fajekrina/sdui'
+import { browserStorage } from '@fajekrina/sdui/browser'
 
 export interface ServiceOptions {
   repository?: UniversalRepository
+  storage?: StoragePort
 }
 
 export function createUniversalService(opts: ServiceOptions = {}) {
   const repo = opts.repository ?? universalRepository
+  const ports = resolvePorts({
+    network: { getPage: (req) => repo.fetchPublishedPage(req.merchantId, req.pageKey, { etag: req.etag, signal: req.signal }) },
+    storage: opts.storage ?? browserStorage()
+  })
 
   return {
-    async getPublishedPage(merchantId: string, pageKey: string): Promise<UniversalPageConfig> {
-      return repo.getPublishedPage(merchantId, pageKey)
+    /** Never throws: `source` tells fresh / not-modified / cache (offline) / error. */
+    loadPublishedPage(merchantId: string, pageKey: string, signal?: AbortSignal): Promise<LoadResult> {
+      return loadPage({ merchantId, pageKey, signal }, { ports })
     },
     async submitAction(payload: ActionPayload): Promise<Record<string, unknown>> {
       return repo.submitAction(payload)
     },
-    /**
-     * Helper: build fallback error page for render
-     */
     toErrorPage(message: string): UniversalPageConfig {
-      return {
-        pageId: 'error',
-        pageKey: 'error',
-        merchantId: 'system',
-        status: 'PUBLISHED',
-        layout: {
-          title: 'Not Found',
-          subtitle: message,
-          components: [{ type: 'Text', id: 'err', props: { content: message }, style: { color: '#ef4444' } } as unknown as Record<string, unknown>] as unknown as NonNullable<UniversalPageConfig['layout']>['components']
-        }
-      } as unknown as UniversalPageConfig
+      return buildErrorPage(message)
     }
   }
 }

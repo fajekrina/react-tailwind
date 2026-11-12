@@ -9,10 +9,12 @@ export default function AdminBuilderPage() {
   const [pages, setPages] = useState<string[]>([])
   const [data, setData] = useState<unknown>(null)
   const [status, setStatus] = useState('')
+  const [lockVersion, setLockVersion] = useState<number | undefined>(undefined)
   const [registry, setRegistry] = useState<Record<string, {props?: Record<string, unknown>}>|undefined>(undefined)
 
+  // palette = backend registry (sdui_component_type); without it the builder falls back to the core registry
   useEffect(() => {
-    fetch('/universal/components.json').then(r=>r.ok?r.json():null).then(j=>{ if(j?.components) setRegistry(j.components); else if(j) setRegistry(j as never) }).catch(()=>{})
+    universalMerchantRepository.componentTypes().then(j => setRegistry(j.components)).catch(() => setRegistry(undefined))
   }, [])
 
   // load page list, default to home
@@ -35,7 +37,7 @@ export default function AdminBuilderPage() {
       setData({ layout: { components: [] } } as unknown)
       return
     }
-    universalMerchantRepository.getDraft(merchantId, pageKey).then(d => setData(d)).catch(() => {})
+    universalMerchantRepository.getDraft(merchantId, pageKey).then(d => { setData(d); setLockVersion(d.lockVersion) }).catch(() => {})
   }, [merchantId, pageKey, pages])
 
   const handleNew = async () => {
@@ -78,13 +80,18 @@ export default function AdminBuilderPage() {
       } catch {}
     }
     try {
-      await universalMerchantRepository.save(merchantId, key, components as unknown[])
+      const res = await universalMerchantRepository.save(merchantId, key, components, isNew ? undefined : lockVersion) as { tree?: string; unchanged?: string[]; page?: { lockVersion?: number } }
       setPageKey(key)
       setData({ layout: { components } } as unknown)
-      setStatus('Saved ✔ ' + key)
+      setLockVersion(res.page?.lockVersion)
+      setStatus(`Saved ✔ ${res.tree ?? key}${res.unchanged?.length === 2 ? ' (tidak ada perubahan)' : ''}`)
       setTimeout(() => setStatus(''), 3000)
       loadPages(merchantId)
-    } catch (e) { setStatus('Save failed: ' + String((e as Error).message)); setTimeout(()=>setStatus(''),3000) }
+    } catch (e) {
+      const err = e as Error & { status?: number }
+      setStatus(err.status === 409 ? 'Save failed: draft diubah di tempat lain — pilih ulang page untuk memuat versi terbaru' : 'Save failed: ' + String(err.message))
+      setTimeout(()=>setStatus(''),5000)
+    }
   }
 
   const onPublish = async ({ components }: { components: UniversalComponent[] }) => {
@@ -96,12 +103,12 @@ export default function AdminBuilderPage() {
       if (!existing) { setStatus(`Publish gagal: pageKey "${key}" belum ada — Save dulu`); setTimeout(()=>setStatus(''),3000); return }
     } catch {}
     try {
-      await universalMerchantRepository.publish(merchantId, key)
-      setStatus('Published ✔ ' + key)
+      const res = await universalMerchantRepository.publish(merchantId, key)
+      setStatus(`Published ✔ ${res.releaseId}`)
       setTimeout(() => setStatus(''), 3000)
     } catch (e) { setStatus('Publish failed: ' + String((e as Error).message)); setTimeout(()=>setStatus(''),3000) }
     // sync data after publish
-    try { const d = await universalMerchantRepository.getDraft(merchantId, key); setData(d) } catch {}
+    try { const d = await universalMerchantRepository.getDraft(merchantId, key); setData(d); setLockVersion(d.lockVersion) } catch {}
   }
 
   return (
