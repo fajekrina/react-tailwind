@@ -5,11 +5,11 @@
  * Before each screen the version manifest is refreshed, so a just-published release shows.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { SduiScreen } from '@fajekrina/sdui/react'
 import type { SduiProps } from '@fajekrina/sdui'
 import { createSduiEngine } from '../sdui/engine'
-import { DEFAULT_MERCHANT, DEFAULT_SCREEN } from '../sdui/config'
+import { DEFAULT_MERCHANT, DEFAULT_SCREEN, specScreenKey } from '../sdui/config'
 
 function toQuery(params: SduiProps): string {
   const qs = new URLSearchParams()
@@ -35,6 +35,10 @@ export default function ScreenPage() {
     engine.refreshManifest().catch((e) => console.warn('[sdui] manifest', e)).finally(() => { if (alive) setReady(true) })
     return () => { alive = false }
   }, [engine, screenKey])
+
+  // a 0.3.x URL (`/merchant_demo/seat-selection`) → the spec key, query kept
+  const specKey = specScreenKey(screenKey)
+  if (specKey !== screenKey) return <Navigate replace to={`/${merchantId}/${specKey}${search}`} />
 
   return (
     <div className="min-h-screen bg-slate-50">
